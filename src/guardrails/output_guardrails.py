@@ -41,12 +41,13 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        "phone": r"\b0\d{9,10}\b",
+        "email": r"\b[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}\b",
+        "national_id": r"\b(?:\d{9}|\d{12})\b",
+        "api_key": r"\bsk-[a-zA-Z0-9-]+\b",
+        "password": r"\bpassword\s*(?:is|[:=])\s*\S+",
+        "demo_admin_password": r"\badmin123\b",
+        "database_host": r"\bdb\.vinbank\.internal(?::\d+)?\b",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -171,17 +172,24 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         response_text = self._extract_text(llm_response)
         if not response_text:
             return llm_response
-
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
-
-        return llm_response  # TODO: modify if needed
+        filter_result = content_filter(response_text)
+        if not filter_result["safe"]:
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=filter_result["redacted"])],
+            )
+            self.redacted_count += 1
+        if self.use_llm_judge:
+            judge_result = await llm_safety_check(filter_result["redacted"])
+            if not judge_result["safe"]:
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(
+                        text="Response blocked by the safety policy."
+                    )],
+                )
+                self.blocked_count += 1
+        return llm_response
 
 
 # ============================================================
